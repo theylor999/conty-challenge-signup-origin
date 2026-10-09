@@ -210,7 +210,7 @@ Estrutura: `src/domain` (links, janela, regra de vitória, motivos; sem I/O), `s
 
 ## Uso de IA
 
-O código e os testes foram escritos com um assistente de IA (Claude), que eu dirigi, e conferi cada regra contra o enunciado. O que eu revisei e ajustei:
+Usei mais de um modelo de IA, cada um num papel: Claude Opus 5.5 para planejar, dividir o trabalho e conferir as entregas; Claude Sonnet 5.5 para escrever o código e os testes; e GPT-6.1 Sol para uma revisão independente contra o enunciado, cujos achados válidos entraram como correção. Eu dirigi o processo e conferi cada regra contra o enunciado. O que eu revisei e ajustei:
 
 - A leitura de "cadastro depois do fim da janela": decidi que o cadastro fora da janela é orgânico (`window_expired`) mesmo com toque dentro dela e mesmo sem toque nenhum, e que esses toques ganham `signup_after_window`, para a auditoria não dizer "venceu" nem "fora da janela" quando o motivo é outro.
 - `kind`, `ref` e horário do clique saem do registro do servidor, não do corpo do app. O `opened_at` ficou obrigatório e também corta: um cadastro enviado com atraso não credita um link que o app só abriu depois dele, mesmo com o clique anterior.
