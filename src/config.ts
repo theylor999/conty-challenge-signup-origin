@@ -28,8 +28,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       preInstallLookbackMs:
         lookbackHours === undefined ? DEFAULTS.attribution.preInstallLookbackMs : lookbackHours * HOUR_MS,
     },
-    publicBaseUrl: env.PUBLIC_BASE_URL ?? DEFAULTS.publicBaseUrl,
-    redirectBaseUrl: env.REDIRECT_BASE_URL ?? DEFAULTS.redirectBaseUrl,
+    publicBaseUrl: validUrl(env.PUBLIC_BASE_URL ?? DEFAULTS.publicBaseUrl, "PUBLIC_BASE_URL"),
+    redirectBaseUrl: validUrl(env.REDIRECT_BASE_URL ?? DEFAULTS.redirectBaseUrl, "REDIRECT_BASE_URL"),
   };
 }
 
@@ -38,4 +38,13 @@ function positive(raw: string | undefined, name: string): number | undefined {
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
   return value;
+}
+
+function validUrl(raw: string, name: string): string {
+  try {
+    new URL(raw);
+  } catch {
+    throw new Error(`${name} must be an absolute URL`);
+  }
+  return raw.replace(/\/$/, "");
 }
