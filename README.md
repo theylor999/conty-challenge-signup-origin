@@ -11,15 +11,15 @@ clique no link  ->  primeira abertura do app  ->  toques  ->  cadastro
 ```
 
 1. **Clique.** `GET /i/:code` grava um clique com `click_id` gerado no servidor e responde `302` para a landing/loja com `cty_src`, `cty_ref` e `ctyc=<click_id>`. A landing repassa esses parâmetros ao app (deep link ou install referrer). Clicar não é tocar: só vira toque quando o app reporta.
-2. **Primeira abertura.** O app gera e guarda um `install_id` e chama `POST /installs/:install_id/first-open`. É idempotente: a segunda chamada devolve o `first_opened_at` original e nunca o move. O app repete a chamada até receber 2xx.
-3. **Toque.** Toda vez que o app abre por um link, chama `POST /touches` com `{install_id, click_id, opened_at}`. `opened_at` é obrigatório: é o instante em que o app abriu o link, guardado no aparelho para o reenvio ser idêntico. Antes da primeira abertura a API responde `409 first_open_required`.
-4. **Cadastro.** O backend chama `POST /signups` com `{user_id, install_id, signed_up_at}`. A decisão é calculada uma vez, gravada e devolvida igual em chamadas repetidas e em `GET /signups/:user_id/attribution`.
+2. **Primeira abertura.** O app gera e guarda um `install_id` e chama `POST /installs/:install_id/first-open` com `{opened_at}`: o instante em que o app abriu pela primeira vez, guardado no aparelho. É esse horário que ancora a janela, não a hora em que o servidor recebe a chamada. É idempotente: a segunda chamada devolve o `first_opened_at` original e nunca o move. O app repete a chamada, com o mesmo `opened_at`, até receber 2xx. Sem `opened_at` a resposta é `422`.
+3. **Toque.** Toda vez que o app abre por um link, chama `POST /touches` com `{install_id, click_id, opened_at}`. `opened_at` é obrigatório: é o instante em que o app abriu o link, guardado no aparelho para o reenvio ser idêntico, e não pode ser anterior à primeira abertura (`422 opened_before_first_open`). Antes da primeira abertura a API responde `409 first_open_required`.
+4. **Cadastro.** O backend chama `POST /signups` com `{user_id, install_id, signed_up_at}`. `signed_up_at` é o instante real do cadastro e é obrigatório, para uma chamada atrasada não empurrar o cadastro para depois de um link aberto depois dele. A decisão é calculada uma vez, gravada e devolvida igual em chamadas repetidas e em `GET /signups/:user_id/attribution`.
 
 | Rota | Função |
 | --- | --- |
 | `POST /links` | cria o link `{kind, ref, code?}` (uso interno) |
 | `GET /i/:code` | registra o clique e redireciona |
-| `POST /installs/:install_id/first-open` | `201` na primeira vez, `200` depois |
+| `POST /installs/:install_id/first-open` | `{opened_at}`; `201` na primeira vez, `200` depois |
 | `POST /touches` | `201` toque novo, `200` com `duplicate: true` |
 | `POST /signups` | `201` decisão nova, `200` repetição |
 | `GET /signups/:user_id/attribution` | a mesma decisão, para auditoria |
@@ -37,7 +37,7 @@ Com `click_id`, `kind`, `ref` e o horário do toque vêm do registro do servidor
 
 ### Repetição
 
-- Mesmo `click_id` no mesmo `install_id`: um toque só (`UNIQUE` no banco). Os relatos extras viram uma linha `duplicate_click` na auditoria.
+- Mesmo `click_id` no mesmo `install_id`: um toque só (`UNIQUE` no banco). Os relatos extras viram uma linha `duplicate_click` na auditoria. Se o app reportar o mesmo clique com `opened_at` diferentes, vale o mais antigo, para o resultado não depender da ordem de chegada.
 - Sem `click_id`: a chave é `hash(kind, ref, opened_at)`. Reenvio idêntico (mesmo `opened_at`) é o mesmo toque; abrir o link de novo em outro instante é outro toque, da mesma origem.
 - Dois cliques físicos no mesmo link são dois toques da mesma origem; o mais recente vence e o outro aparece como `lost_to_later_touch`.
 
@@ -82,9 +82,10 @@ Sem origem, o cadastro é `organic` com `reason_code` gravado, nesta precedênci
 Saída real, capturada com o servidor rodando (`PORT=3055`, linhas de `curl` abreviadas). Um clique de campanha, outro de indicação um segundo depois, o mesmo clique reportado duas vezes, depois o cadastro:
 
 ```
+POST /links          {"kind":"campaign","ref":"cmp_123","code":"verao26"}
 POST /links          {"kind":"referral","ref":"ana_silva","code":"ana"}
   {"code":"ana","kind":"referral","ref":"ana_silva","short_url":"https://conty.app/i/ana","deep_link":"conty://open?cty_src=referral&cty_ref=ana_silva"}
-POST /installs/inst-7f3a9c1e/first-open
+POST /installs/inst-7f3a9c1e/first-open   {"opened_at":"2026-10-09T15:41:11.121Z"}
   {"created":true,"install_id":"inst-7f3a9c1e","first_opened_at":"2026-10-09T15:41:11.121Z"}
 GET  /i/verao26      -> location: https://conty.app/app?cty_src=campaign&cty_ref=cmp_123&ctyc=clk_dpwZd-GKTTHr
 GET  /i/ana          -> location: https://conty.app/app?cty_src=referral&cty_ref=ana_silva&ctyc=clk_fuJneuwbLJit
@@ -94,7 +95,7 @@ POST /touches        (clk_fuJneuwbLJit, indicação)
   {"duplicate":false,"touch_id":"tch_2386c04ee67aa968","kind":"referral","ref":"ana_silva","at":"2026-10-09T15:41:12.266Z","at_source":"click","signup_frozen":false}
 POST /touches        (clk_fuJneuwbLJit de novo)
   {"duplicate":true,"touch_id":"tch_2386c04ee67aa968","kind":"referral","ref":"ana_silva","at":"2026-10-09T15:41:12.266Z","at_source":"click","signup_frozen":false}
-POST /signups        {"user_id":"usr_501","install_id":"inst-7f3a9c1e"}
+POST /signups        {"user_id":"usr_501","install_id":"inst-7f3a9c1e","signed_up_at":"2026-10-09T15:41:13.562Z"}
 ```
 
 ```json
@@ -173,7 +174,7 @@ A lista `touches` vem em ordem cronológica. Em empate de horário, o de melhor 
 
 ### Congelamento
 
-O cadastro grava o JSON da decisão. Toque que chega depois fica guardado, mas não altera nada, inclusive um toque atrasado cujo horário é anterior ao cadastro: a decisão vale pelo que o servidor sabia no `POST /signups`. Repetir o cadastro devolve o mesmo corpo (`200`); mesmo `user_id` com `install_id` ou `signed_up_at` diferente dá `409 signup_conflict`.
+O cadastro grava o JSON da decisão. Toque que chega depois fica guardado, mas não altera nada, inclusive um toque atrasado cujo horário é anterior ao cadastro: a decisão vale pelo que o servidor sabia no `POST /signups`. Repetir o cadastro com o mesmo `signed_up_at` devolve o mesmo corpo (`200`); mesmo `user_id` com `install_id` ou `signed_up_at` diferente dá `409 signup_conflict`.
 
 ## Rodar
 
@@ -192,10 +193,10 @@ Estrutura: `src/domain` (links, janela, regra de vitória, motivos; sem I/O), `s
 
 ## Testes
 
-`npm test` roda 68 testes com relógio controlado, em memória:
+`npm test` roda 74 testes com relógio controlado, em memória:
 
 - domínio: janela e bordas ao milissegundo, último toque, empate por tipo e por `click_id` em qualquer ordem de entrada, todos os motivos orgânicos;
-- HTTP: dois links diferentes, empate exato de horário, mesmo clique duas vezes, toque depois do cadastro, link aberto depois de um cadastro enviado com atraso, toque fora da janela, cadastro sem toques, cadastro sem primeira abertura, `first-open` duas vezes sem mover a janela, decisão imutável após novos toques, auditoria igual ao cadastro, constraints do SQLite.
+- HTTP: dois links diferentes, empate exato de horário, mesmo clique duas vezes (inclusive com `opened_at` diferentes, nas duas ordens de chegada), toque depois do cadastro, link aberto depois de um cadastro enviado com atraso, primeira abertura reportada com atraso, toque fora da janela, cadastro sem toques, cadastro sem primeira abertura, `first-open` duas vezes sem mover a janela, `opened_at` e `signed_up_at` obrigatórios, decisão imutável após novos toques, auditoria igual ao cadastro, constraints do SQLite.
 
 ## O que ficou de fora
 
@@ -213,6 +214,6 @@ Estrutura: `src/domain` (links, janela, regra de vitória, motivos; sem I/O), `s
 Usei mais de um modelo de IA, cada um num papel: Claude Opus 5.5 para planejar, dividir o trabalho e conferir as entregas; Claude Sonnet 5.5 para escrever o código e os testes; e GPT-6.1 Sol para uma revisão independente contra o enunciado, cujos achados válidos entraram como correção. Eu dirigi o processo e conferi cada regra contra o enunciado. O que eu revisei e ajustei:
 
 - A leitura de "cadastro depois do fim da janela": decidi que o cadastro fora da janela é orgânico (`window_expired`) mesmo com toque dentro dela e mesmo sem toque nenhum, e que esses toques ganham `signup_after_window`, para a auditoria não dizer "venceu" nem "fora da janela" quando o motivo é outro.
-- `kind`, `ref` e horário do clique saem do registro do servidor, não do corpo do app. O `opened_at` ficou obrigatório e também corta: um cadastro enviado com atraso não credita um link que o app só abriu depois dele, mesmo com o clique anterior.
+- `kind`, `ref` e horário do clique saem do registro do servidor, não do corpo do app. O `opened_at` ficou obrigatório e também corta: um cadastro enviado com atraso não credita um link que o app só abriu depois dele, mesmo com o clique anterior. Pelo mesmo motivo a primeira abertura e o cadastro mandam o horário do evento, e o servidor não usa a hora de recebimento no lugar.
 - A linha `duplicate_click` primeiro saiu repetindo o `touch_id` do toque original; mudei para `touch_id: null` com `duplicate_of`, para ninguém contar o toque duas vezes ao ler a lista.
 - Os testes de borda (clique em `F - 24h` exato, cadastro em `F + 7d` exato, toque no mesmo milissegundo do cadastro, data inexistente como 31/02) e o caso de dois usuários no mesmo `install_id`, que o enunciado não pedia mas gerava origem duplicada; a auditoria do segundo ainda lista os toques.
