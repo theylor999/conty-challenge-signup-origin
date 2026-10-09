@@ -26,8 +26,13 @@ export const noEligibleTouch = (count: number) =>
 export const windowExpired = (signedUpAt: number, w: AttributionWindow, c: AttributionConfig) =>
   `Cadastro em ${iso(signedUpAt)} depois do fim da janela (${iso(w.endsAt)}, ${duration(c.windowMs)} após a primeira abertura); origem orgânica.`;
 
-export const afterSignup = (at: number, signedUpAt: number) =>
-  `Toque em ${iso(at)} é posterior ao cadastro (${iso(signedUpAt)}); não conta.`;
+export const afterSignup = (t: Pick<TouchFact, "at" | "openedAt">, signedUpAt: number) =>
+  t.at > signedUpAt
+    ? `Toque em ${iso(t.at)} é posterior ao cadastro (${iso(signedUpAt)}); não conta.`
+    : `Clique em ${iso(t.at)}, mas o app só abriu o link em ${iso(t.openedAt)}, depois do cadastro (${iso(signedUpAt)}); não conta.`;
+
+export const touchOfUsedInstall = () =>
+  "Toque desta instalação, que já foi atribuída ao cadastro de outro usuário; não é reavaliado.";
 
 export function outsideWindow(at: number, w: AttributionWindow, c: AttributionConfig) {
   return at < w.startsAt

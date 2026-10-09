@@ -179,13 +179,27 @@ describe("touch and signup order", () => {
     const early = await h.click("camp1");
     h.clock.set(T0 + 3 * HOUR_MS);
     const late = await h.click("refana");
-    await h.touch({ install_id: INSTALL, click_id: early });
+    await h.touch({ install_id: INSTALL, click_id: early, opened_at: iso(T0 + HOUR_MS) });
     await h.touch({ install_id: INSTALL, click_id: late });
 
     const res = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: iso(T0 + 2 * HOUR_MS) });
 
     expect(res.json.origin).toMatchObject({ kind: "campaign" });
     expect(outcomesByClick(res.json.touches)).toEqual({ [early]: "won", [late]: "after_signup" });
+  });
+
+  it("a click before the signup does not count if the app opened the link after it (delayed signup)", async () => {
+    const h = await withLinks();
+    h.clock.set(T0 + HOUR_MS);
+    const click = await h.click("camp1");
+    h.clock.set(T0 + 3 * HOUR_MS);
+    await h.touch({ install_id: INSTALL, click_id: click, opened_at: iso(T0 + 3 * HOUR_MS) });
+
+    const res = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: iso(T0 + 2 * HOUR_MS) });
+
+    expect(res.json.origin).toMatchObject({ kind: "organic", reason_code: "no_eligible_touch" });
+    expect(res.json.touches[0]).toMatchObject({ outcome: "after_signup", opened_at: iso(T0 + 3 * HOUR_MS) });
+    expect(res.json.touches[0].reason).toContain("o app só abriu o link");
   });
 
   it("a touch at the exact signup instant still counts", async () => {
@@ -241,6 +255,13 @@ describe("window", () => {
     const res = await h.signup({ user_id: "u1", install_id: INSTALL });
     expect(res.json.origin).toMatchObject({ kind: "organic", reason_code: "window_expired" });
     expect(res.json.touches[0]).toMatchObject({ outcome: "signup_after_window" });
+  });
+
+  it("signup after the window end with no touches is window_expired", async () => {
+    const h = await withLinks();
+    h.clock.set(T0 + 8 * DAY_MS);
+    const res = await h.signup({ user_id: "u1", install_id: INSTALL });
+    expect(res.json.origin).toMatchObject({ kind: "organic", reason_code: "window_expired" });
   });
 
   it("signup exactly at the window end is still inside", async () => {
@@ -315,6 +336,9 @@ describe("organic with a recorded reason", () => {
     const second = await h.signup({ user_id: "u2", install_id: INSTALL });
     expect(first.json.origin).toMatchObject({ kind: "campaign" });
     expect(second.json.origin).toMatchObject({ kind: "organic", reason_code: "install_already_used" });
+    expect(second.json.window).toEqual(first.json.window);
+    expect(second.json.touches).toHaveLength(1);
+    expect(second.json.touches[0]).toMatchObject({ outcome: "install_already_used", click_id: click });
   });
 });
 
@@ -388,6 +412,17 @@ describe("links, clicks and input validation", () => {
     expect((await h.call("GET", "/i/nope")).status).toBe(404);
   });
 
+  it("keeps an existing query and fragment of the redirect target", async () => {
+    const h = setup({ ...DEFAULTS, redirectBaseUrl: "https://landing.example/app?lang=pt#open" });
+    await h.link("campaign", "cmp_123", "camp1");
+    const res = await h.call("GET", "/i/camp1");
+    const location = new URL(res.headers.get("location")!);
+    expect(location.searchParams.get("lang")).toBe("pt");
+    expect(location.searchParams.get("cty_src")).toBe("campaign");
+    expect(location.searchParams.get("ctyc")).toMatch(/^clk_/);
+    expect(location.hash).toBe("#open");
+  });
+
   it("each GET creates a new click_id", async () => {
     const h = await withLinks();
     expect(await h.click("camp1")).not.toBe(await h.click("camp1"));
@@ -415,6 +450,25 @@ describe("links, clicks and input validation", () => {
     const click = await h.click("camp1");
     const res = await h.touch({ install_id: INSTALL, click_id: click });
     expect(res.json).toMatchObject({ kind: "campaign", ref: "cmp_123", at_source: "click" });
+  });
+
+  it("opened_at is required on a touch", async () => {
+    const h = await withLinks();
+    const click = await h.click("camp1");
+    const res = await h.call("POST", "/touches", { install_id: INSTALL, click_id: click });
+    expect(res.status).toBe(422);
+    expect(res.json.error.message).toContain("opened_at");
+  });
+
+  it("rejects calendar dates that do not exist and accepts equivalent offsets", async () => {
+    const h = await withLinks();
+    h.clock.set(T0 + HOUR_MS);
+    const bad = await h.touch({ install_id: INSTALL, kind: "campaign", ref: "x", opened_at: "2026-02-31T12:00:00Z" });
+    expect(bad.status).toBe(422);
+    expect((await h.touch({ install_id: INSTALL, kind: "campaign", ref: "x", opened_at: "2026-03-10T25:00:00Z" })).status).toBe(422);
+    const utc = await h.touch({ install_id: INSTALL, kind: "campaign", ref: "x", opened_at: "2026-03-10T12:30:00Z" });
+    const offset = await h.touch({ install_id: INSTALL, kind: "campaign", ref: "x", opened_at: "2026-03-10T09:30:00-03:00" });
+    expect(offset.json).toMatchObject({ duplicate: true, touch_id: utc.json.touch_id });
   });
 
   it("rejects timestamps in the future and malformed instants", async () => {

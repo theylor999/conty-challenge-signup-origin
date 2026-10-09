@@ -8,7 +8,6 @@ export function createApp(service: AttributionService): Hono {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
-  // Admin-style endpoint to create the links marketing and creators share.
   app.post("/links", async (c) => {
     const body = await v.readBody(c.req.raw);
     const { created, link } = service.createLink({
@@ -19,7 +18,6 @@ export function createApp(service: AttributionService): Hono {
     return c.json(link, created ? 201 : 200);
   });
 
-  // Public short link: log the click, then send the browser on with the click id.
   app.get("/i/:code", (c) => {
     const target = service.registerClick(c.req.param("code"), c.req.header("user-agent") ?? null);
     c.header("Cache-Control", "no-store");
@@ -42,7 +40,7 @@ export function createApp(service: AttributionService): Hono {
       // With a click_id the server's record decides kind/ref; they are only checked when sent.
       kind: clickId && body.kind === undefined ? undefined : v.kind(body.kind),
       ref: clickId && body.ref === undefined ? undefined : v.ref(body.ref),
-      openedAt: v.optionalInstant(body.opened_at, "opened_at"),
+      openedAt: v.requiredInstant(body.opened_at, "opened_at"),
     });
     return c.json(result, result.duplicate ? 200 : 201);
   });

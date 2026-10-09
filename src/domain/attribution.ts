@@ -43,17 +43,18 @@ export function attributionWindow(
 export type TouchStatus = "eligible" | "after_signup" | "outside_window" | "signup_after_window";
 
 /**
- * A touch is eligible iff startsAt <= at <= min(signedUpAt, endsAt) and the
+ * A touch is eligible iff startsAt <= at <= min(signedUpAt, endsAt), the app
+ * opened the link at or before the signup (openedAt <= signedUpAt), and the
  * signup itself happened inside the window (signedUpAt <= endsAt).
  * Checks run in this order so the reported reason is the most basic one.
  */
 export function classifyTouch(
-  at: number,
+  touch: Pick<TouchFact, "at" | "openedAt">,
   window: AttributionWindow,
   signedUpAt: number,
 ): TouchStatus {
-  if (at > signedUpAt) return "after_signup";
-  if (at < window.startsAt || at > window.endsAt) return "outside_window";
+  if (touch.at > signedUpAt || touch.openedAt > signedUpAt) return "after_signup";
+  if (touch.at < window.startsAt || touch.at > window.endsAt) return "outside_window";
   if (signedUpAt > window.endsAt) return "signup_after_window";
   return "eligible";
 }
@@ -66,6 +67,8 @@ export interface TouchFact {
   /** Moment of the touch: server click time when known, else the app's opened_at. */
   at: number;
   atSource: "click" | "opened_at";
+  /** When the app says it opened the link. Never earlier than the click that produced it. */
+  openedAt: number;
   /** Stable unique id per touch inside an install; last resort of the tie-break. */
   tieKey: string;
   /** Extra reports of the same click received after the first one. */
@@ -79,7 +82,8 @@ export type TouchOutcome =
   | "after_signup"
   | "outside_window"
   | "signup_after_window"
-  | "duplicate_click";
+  | "duplicate_click"
+  | "install_already_used";
 
 export interface TouchVerdict {
   /** Null on a duplicate_click entry: it describes extra reports, not a touch of its own. */
@@ -90,6 +94,7 @@ export interface TouchVerdict {
   ref: string;
   at: number;
   atSource: TouchFact["atSource"];
+  openedAt: number;
   outcome: TouchOutcome;
   reason: string;
   ignoredReports: number;
@@ -143,19 +148,19 @@ export function decideAttribution(input: DecisionInput): Decision {
   if (input.firstOpenedAt === null) {
     return { ...base, window: null, touches: [], origin: organic("no_first_open", why.noFirstOpen()) };
   }
-  if (input.installAlreadyUsed) {
-    return { ...base, window: null, touches: [], origin: organic("install_already_used", why.installAlreadyUsed()) };
-  }
 
   const window = attributionWindow(input.firstOpenedAt, config);
-  const status = new Map(input.touches.map((t) => [t.id, classifyTouch(t.at, window, signedUpAt)]));
-  const ranked = input.touches.filter((t) => status.get(t.id) === "eligible").sort(compareRank);
+  const status = new Map(input.touches.map((t) => [t.id, classifyTouch(t, window, signedUpAt)]));
+  const ranked = input.installAlreadyUsed
+    ? []
+    : input.touches.filter((t) => status.get(t.id) === "eligible").sort(compareRank);
   const winner = ranked[0];
 
   const outcomes = new Map<string, { outcome: TouchOutcome; reason: string }>();
   for (const t of input.touches) {
     const s = status.get(t.id)!;
-    if (s === "after_signup") outcomes.set(t.id, { outcome: s, reason: why.afterSignup(t.at, signedUpAt) });
+    if (input.installAlreadyUsed) outcomes.set(t.id, { outcome: "install_already_used", reason: why.touchOfUsedInstall() });
+    else if (s === "after_signup") outcomes.set(t.id, { outcome: s, reason: why.afterSignup(t, signedUpAt) });
     else if (s === "outside_window") outcomes.set(t.id, { outcome: s, reason: why.outsideWindow(t.at, window, config) });
     else if (s === "signup_after_window") outcomes.set(t.id, { outcome: s, reason: why.signupAfterWindow(signedUpAt, window, config) });
   }
@@ -175,7 +180,7 @@ export function decideAttribution(input: DecisionInput): Decision {
   const touches: TouchVerdict[] = [];
   for (const t of timeline) {
     const { outcome, reason } = outcomes.get(t.id)!;
-    const verdict = { clickId: t.clickId, kind: t.kind, ref: t.ref, at: t.at, atSource: t.atSource };
+    const verdict = { clickId: t.clickId, kind: t.kind, ref: t.ref, at: t.at, atSource: t.atSource, openedAt: t.openedAt };
     touches.push({ ...verdict, touchId: t.id, duplicateOf: null, outcome, reason, ignoredReports: 0 });
     if (t.duplicateReports > 0) {
       touches.push({
@@ -193,11 +198,15 @@ export function decideAttribution(input: DecisionInput): Decision {
   if (winner) {
     return { ...decided, origin: { kind: winner.kind, ref: winner.ref, touchId: winner.id, reason: outcomes.get(winner.id)!.reason } };
   }
-  if (input.touches.length === 0) {
-    return { ...decided, origin: organic("no_touches", why.noTouches()) };
+  if (input.installAlreadyUsed) {
+    return { ...decided, origin: organic("install_already_used", why.installAlreadyUsed()) };
   }
+  // Expiry comes first: a late signup is organic whether or not touches exist.
   if (signedUpAt > window.endsAt) {
     return { ...decided, origin: organic("window_expired", why.windowExpired(signedUpAt, window, config)) };
+  }
+  if (input.touches.length === 0) {
+    return { ...decided, origin: organic("no_touches", why.noTouches()) };
   }
   return { ...decided, origin: organic("no_eligible_touch", why.noEligibleTouch(input.touches.length)) };
 }

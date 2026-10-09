@@ -53,7 +53,9 @@ export function setup(config: AppConfig = DEFAULTS) {
     },
     firstOpen: (installId: string, openedAt?: string) =>
       call("POST", `/installs/${installId}/first-open`, openedAt ? { opened_at: openedAt } : undefined),
-    touch: (body: Record<string, unknown>) => call("POST", "/touches", body),
+    /** Like the app: opened_at is always sent, here the current clock time unless given. */
+    touch: (body: Record<string, unknown>) =>
+      call("POST", "/touches", { opened_at: iso(clock.now()), ...body }),
     signup: (body: Record<string, unknown>) => call("POST", "/signups", body),
     attribution: (userId: string) => call("GET", `/signups/${userId}/attribution`),
   };

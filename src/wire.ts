@@ -18,6 +18,7 @@ export interface TouchWire {
   ref: string;
   at: string;
   at_source: "click" | "opened_at";
+  opened_at: string;
   outcome: TouchOutcome;
   reason: string;
   ignored_reports: number;
@@ -72,6 +73,7 @@ function touchToWire(t: TouchVerdict): TouchWire {
     ref: t.ref,
     at: iso(t.at),
     at_source: t.atSource,
+    opened_at: iso(t.openedAt),
     outcome: t.outcome,
     reason: t.reason,
     ignored_reports: t.ignoredReports,

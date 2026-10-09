@@ -23,6 +23,7 @@ function touch(id: string, over: Partial<TouchFact> = {}): TouchFact {
     tieKey: id,
     duplicateReports: 0,
     ...over,
+    openedAt: over.openedAt ?? over.at ?? F + HOUR_MS,
   };
 }
 
@@ -36,6 +37,9 @@ function decide(touches: TouchFact[], signedUpAt = F + 2 * DAY_MS, firstOpenedAt
   });
 }
 
+const classify = (at: number, signedUpAt: number, openedAt = at) =>
+  classifyTouch({ at, openedAt }, window, signedUpAt);
+
 const outcomes = (d: Decision) =>
   Object.fromEntries(d.touches.map((t) => [t.touchId, t.outcome]));
 
@@ -44,24 +48,29 @@ describe("attributionWindow / classifyTouch", () => {
     expect(window.startsAt).toBe(F - DAY_MS);
     expect(window.endsAt).toBe(F + 7 * DAY_MS);
     const signup = F + 7 * DAY_MS;
-    expect(classifyTouch(window.startsAt, window, signup)).toBe("eligible");
-    expect(classifyTouch(window.startsAt - 1, window, signup)).toBe("outside_window");
-    expect(classifyTouch(window.endsAt, window, signup)).toBe("eligible");
-    expect(classifyTouch(window.endsAt + 1, window, signup + 2)).toBe("outside_window");
+    expect(classify(window.startsAt, signup)).toBe("eligible");
+    expect(classify(window.startsAt - 1, signup)).toBe("outside_window");
+    expect(classify(window.endsAt, signup)).toBe("eligible");
+    expect(classify(window.endsAt + 1, signup + 2)).toBe("outside_window");
   });
 
   it("a touch at the exact signup instant counts; 1 ms later does not", () => {
     const signup = F + HOUR_MS;
-    expect(classifyTouch(signup, window, signup)).toBe("eligible");
-    expect(classifyTouch(signup + 1, window, signup)).toBe("after_signup");
+    expect(classify(signup, signup)).toBe("eligible");
+    expect(classify(signup + 1, signup)).toBe("after_signup");
   });
 
   it("after_signup wins over outside_window", () => {
-    expect(classifyTouch(window.endsAt + DAY_MS, window, F + DAY_MS)).toBe("after_signup");
+    expect(classify(window.endsAt + DAY_MS, F + DAY_MS)).toBe("after_signup");
+  });
+
+  it("a click before the signup does not count if the app opened the link after it", () => {
+    expect(classify(F + HOUR_MS, F + 2 * HOUR_MS, F + 3 * HOUR_MS)).toBe("after_signup");
+    expect(classify(F + HOUR_MS, F + 2 * HOUR_MS, F + 2 * HOUR_MS)).toBe("eligible");
   });
 
   it("a signup after the window end invalidates in-window touches", () => {
-    expect(classifyTouch(F + HOUR_MS, window, window.endsAt + 1)).toBe("signup_after_window");
+    expect(classify(F + HOUR_MS, window.endsAt + 1)).toBe("signup_after_window");
   });
 });
 
@@ -149,6 +158,25 @@ describe("decideAttribution", () => {
     expect(d.origin).toMatchObject({ touchId: "clk_a" });
   });
 
+  it("signup after the window end with no touches is window_expired, not no_touches", () => {
+    expect(decide([], F + 8 * DAY_MS).origin).toMatchObject({ kind: "organic", reasonCode: "window_expired" });
+  });
+
+  it("opened after signup: the touch is after_signup even though the click was earlier", () => {
+    const d = decide([touch("clk_a", { at: F + HOUR_MS, openedAt: F + 3 * HOUR_MS })], F + 2 * HOUR_MS);
+    expect(d.origin).toMatchObject({ kind: "organic", reasonCode: "no_eligible_touch" });
+    expect(d.touches[0]).toMatchObject({ outcome: "after_signup" });
+    expect(d.touches[0].reason).toMatch(/o app só abriu o link/);
+  });
+
+  it("mixed tie, same kind: server click (clk_) sorts before a pasted link, in any arrival order", () => {
+    const at = F + HOUR_MS;
+    const click = touch("tch_1", { at, tieKey: "clk_000009" });
+    const pasted = touch("tch_2", { at, clickId: null, atSource: "opened_at", tieKey: "link:00ab" });
+    expect(decide([pasted, click]).origin).toMatchObject({ touchId: "tch_1" });
+    expect(decide([click, pasted]).origin).toMatchObject({ touchId: "tch_1" });
+  });
+
   it("no first open: organic no_first_open, no window", () => {
     const d = decide([], F, null);
     expect(d.window).toBeNull();
@@ -164,6 +192,10 @@ describe("decideAttribution", () => {
       config: DEFAULT_CONFIG,
     });
     expect(d.origin).toMatchObject({ kind: "organic", reasonCode: "install_already_used" });
+    expect(d.window).not.toBeNull();
+    expect(d.touches).toHaveLength(1);
+    expect(d.touches[0]).toMatchObject({ outcome: "install_already_used" });
+    expect(d.touches[0].reason).toMatch(/outro usuário/);
   });
 
   it("repeated reports of one click appear as one duplicate_click entry and one touch", () => {

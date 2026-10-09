@@ -20,7 +20,7 @@ export interface TouchInput {
   clickId?: string;
   kind?: LinkKind;
   ref?: string;
-  openedAt?: number;
+  openedAt: number;
 }
 
 export interface SignupInput {
@@ -80,8 +80,11 @@ export class AttributionService {
       clicked_at: this.clock.now(),
       user_agent: userAgent,
     });
-    const params = buildLinkParams({ kind: link.kind, ref: link.ref, clickId });
-    return `${this.config.redirectBaseUrl}?${params.toString()}`;
+    const target = new URL(this.config.redirectBaseUrl);
+    for (const [name, value] of buildLinkParams({ kind: link.kind, ref: link.ref, clickId })) {
+      target.searchParams.set(name, value);
+    }
+    return target.toString();
   }
 
   /** Idempotent: a second call returns the stored first_opened_at and never moves it. */
@@ -98,7 +101,7 @@ export class AttributionService {
       throw new AppError(409, "first_open_required", "Registre a primeira abertura (POST /installs/:install_id/first-open) antes dos toques.");
     }
     const now = this.clock.now();
-    const openedAt = input.openedAt ?? now;
+    const { openedAt } = input;
     this.rejectFuture(openedAt, "opened_at");
 
     const resolved = resolveTouch(this.db, input, openedAt);
@@ -225,6 +228,7 @@ function toFact(row: TouchRow): TouchFact {
     ref: row.ref,
     at: row.at,
     atSource: row.at_source,
+    openedAt: row.opened_at,
     tieKey: row.click_id ?? row.dedup_key,
     duplicateReports: row.duplicate_reports,
   };
