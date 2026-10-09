@@ -210,7 +210,7 @@ Estrutura: `src/domain` (links, janela, regra de vitória, motivos; sem I/O), `s
 
 ## Uso de IA
 
-Escrevi o código e os testes com um assistente de código de IA (Claude), que eu dirigi, e conferi cada regra contra o enunciado. O que eu revisei e ajustei:
+O código e os testes foram escritos com um assistente de IA (Claude), que eu dirigi, e conferi cada regra contra o enunciado. O que eu revisei e ajustei:
 
 - A leitura de "cadastro depois do fim da janela": decidi que o cadastro fora da janela é orgânico (`window_expired`) mesmo com toque dentro dela e mesmo sem toque nenhum, e que esses toques ganham `signup_after_window`, para a auditoria não dizer "venceu" nem "fora da janela" quando o motivo é outro.
 - `kind`, `ref` e horário do clique saem do registro do servidor, não do corpo do app. O `opened_at` ficou obrigatório e também corta: um cadastro enviado com atraso não credita um link que o app só abriu depois dele, mesmo com o clique anterior.
