@@ -11,7 +11,7 @@ export interface SignupFacts {
 }
 
 export interface TouchWire {
-  touch_id: string;
+  touch_id: string | null;
   duplicate_of: string | null;
   click_id: string | null;
   kind: string;

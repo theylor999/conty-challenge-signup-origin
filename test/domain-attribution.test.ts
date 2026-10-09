@@ -169,7 +169,7 @@ describe("decideAttribution", () => {
   it("repeated reports of one click appear as one duplicate_click entry and one touch", () => {
     const d = decide([touch("clk_a", { duplicateReports: 3 })]);
     expect(d.touches.map((t) => t.outcome)).toEqual(["won", "duplicate_click"]);
-    expect(d.touches[1]).toMatchObject({ duplicateOf: "clk_a", ignoredReports: 3 });
+    expect(d.touches[1]).toMatchObject({ touchId: null, duplicateOf: "clk_a", ignoredReports: 3 });
   });
 
   it("every touch has a pt-BR reason", () => {

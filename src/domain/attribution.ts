@@ -82,7 +82,8 @@ export type TouchOutcome =
   | "duplicate_click";
 
 export interface TouchVerdict {
-  touchId: string;
+  /** Null on a duplicate_click entry: it describes extra reports, not a touch of its own. */
+  touchId: string | null;
   duplicateOf: string | null;
   clickId: string | null;
   kind: LinkKind;
@@ -179,7 +180,7 @@ export function decideAttribution(input: DecisionInput): Decision {
     if (t.duplicateReports > 0) {
       touches.push({
         ...verdict,
-        touchId: t.id,
+        touchId: null,
         duplicateOf: t.id,
         outcome: "duplicate_click",
         reason: why.duplicateClick(t),
