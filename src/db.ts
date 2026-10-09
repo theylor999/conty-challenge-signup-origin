@@ -167,8 +167,12 @@ export class Db {
     );
   }
 
-  countDuplicateReport(touchId: string): void {
-    this.run("UPDATE touches SET duplicate_reports = duplicate_reports + 1 WHERE touch_id = ?", touchId);
+  /** A repeated report of the same click keeps the earliest opened_at, so the result does not depend on arrival order. */
+  countDuplicateReport(touchId: string, openedAt: number): void {
+    this.run(
+      "UPDATE touches SET duplicate_reports = duplicate_reports + 1, opened_at = MIN(opened_at, ?) WHERE touch_id = ?",
+      openedAt, touchId,
+    );
   }
 
   listTouches(installId: string): TouchRow[] {

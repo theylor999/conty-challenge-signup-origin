@@ -26,8 +26,8 @@ export function createApp(service: AttributionService): Hono {
 
   app.post("/installs/:install_id/first-open", async (c) => {
     const installId = v.id(c.req.param("install_id"), "install_id");
-    const body = await v.readBody(c.req.raw, true);
-    const result = service.firstOpen(installId, v.optionalInstant(body.opened_at, "opened_at"));
+    const body = await v.readBody(c.req.raw);
+    const result = service.firstOpen(installId, v.requiredInstant(body.opened_at, "opened_at"));
     return c.json(result, result.created ? 201 : 200);
   });
 
@@ -38,8 +38,8 @@ export function createApp(service: AttributionService): Hono {
       installId: v.id(body.install_id, "install_id"),
       clickId,
       // With a click_id the server's record decides kind/ref; they are only checked when sent.
-      kind: clickId && body.kind === undefined ? undefined : v.kind(body.kind),
-      ref: clickId && body.ref === undefined ? undefined : v.ref(body.ref),
+      kind: clickId && body.kind == null ? undefined : v.kind(body.kind),
+      ref: clickId && body.ref == null ? undefined : v.ref(body.ref),
       openedAt: v.requiredInstant(body.opened_at, "opened_at"),
     });
     return c.json(result, result.duplicate ? 200 : 201);
@@ -50,7 +50,7 @@ export function createApp(service: AttributionService): Hono {
     const { created, body: decision } = service.signup({
       userId: v.id(body.user_id, "user_id"),
       installId: v.optionalId(body.install_id, "install_id"),
-      signedUpAt: v.optionalInstant(body.signed_up_at, "signed_up_at"),
+      signedUpAt: v.requiredInstant(body.signed_up_at, "signed_up_at"),
     });
     return c.json(decision, created ? 201 : 200);
   });

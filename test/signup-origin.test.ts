@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS } from "../src/config.ts";
+import { parseLinkParams } from "../src/domain/links.ts";
 import { DAY_MS, HOUR_MS, INSTALL, T0, iso, setup, withLinks } from "./helpers.ts";
 
 const outcomesByClick = (touches: { click_id: string | null; outcome: string }[]) =>
@@ -157,7 +158,8 @@ describe("touch and signup order", () => {
     const before = await h.click("camp1");
     await h.touch({ install_id: INSTALL, click_id: before });
     h.clock.set(T0 + 2 * HOUR_MS);
-    const signup = await h.signup({ user_id: "u1", install_id: INSTALL });
+    const signedUpAt = iso(T0 + 2 * HOUR_MS);
+    const signup = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: signedUpAt });
 
     h.clock.set(T0 + 3 * HOUR_MS);
     const late = await h.click("refana");
@@ -168,7 +170,7 @@ describe("touch and signup order", () => {
     const audit = await h.attribution("u1");
     expect(audit.json).toEqual(signup.json);
     expect(audit.json.origin).toMatchObject({ kind: "campaign" });
-    const replay = await h.signup({ user_id: "u1", install_id: INSTALL });
+    const replay = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: signedUpAt });
     expect(replay.status).toBe(200);
     expect(replay.json).toEqual(signup.json);
   });
@@ -362,9 +364,10 @@ describe("signup freeze and audit", () => {
 
   it("repeating the signup returns the same decision, even with a later clock", async () => {
     const h = await withLinks();
-    const first = await h.signup({ user_id: "u1", install_id: INSTALL });
+    const signedUpAt = iso(T0);
+    const first = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: signedUpAt });
     h.clock.advance(30 * DAY_MS);
-    const second = await h.signup({ user_id: "u1", install_id: INSTALL });
+    const second = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: signedUpAt });
     expect(second.status).toBe(200);
     expect(second.json).toEqual(first.json);
   });
@@ -460,6 +463,45 @@ describe("links, clicks and input validation", () => {
     expect(res.json.error.message).toContain("opened_at");
   });
 
+  it("first-open requires the app's opened_at and a touch cannot predate it", async () => {
+    const h = setup();
+    await h.link("campaign", "cmp_123", "camp1");
+    const noBody = await h.call("POST", `/installs/${INSTALL}/first-open`);
+    expect(noBody.status).toBe(400);
+    const noTime = await h.call("POST", `/installs/${INSTALL}/first-open`, {});
+    expect(noTime.status).toBe(422);
+    expect(noTime.json.error.message).toContain("opened_at");
+
+    h.clock.set(T0 + HOUR_MS);
+    await h.firstOpen(INSTALL, iso(T0 + HOUR_MS));
+    const click = await h.click("camp1");
+    const early = await h.touch({ install_id: INSTALL, click_id: click, opened_at: iso(T0 + HOUR_MS - 1) });
+    expect(early.status).toBe(422);
+    expect(early.json.error.code).toBe("opened_before_first_open");
+    expect((await h.touch({ install_id: INSTALL, click_id: click, opened_at: iso(T0 + HOUR_MS) })).status).toBe(201);
+  });
+
+  it("signup requires the backend's signed_up_at", async () => {
+    const h = await withLinks();
+    const res = await h.call("POST", "/signups", { user_id: "u1", install_id: INSTALL });
+    expect(res.status).toBe(422);
+    expect(res.json.error.message).toContain("signed_up_at");
+  });
+
+  it("what parseLinkParams reads from a click-only link is accepted by POST /touches", async () => {
+    const h = await withLinks();
+    const click = await h.click("camp1");
+    const parsed = parseLinkParams(`conty://open?ctyc=${click}`)!;
+    const res = await h.touch({
+      install_id: INSTALL,
+      click_id: parsed.clickId,
+      kind: parsed.kind,
+      ref: parsed.ref,
+    });
+    expect(res.status).toBe(201);
+    expect(res.json).toMatchObject({ kind: "campaign", ref: "cmp_123" });
+  });
+
   it("rejects calendar dates that do not exist and accepts equivalent offsets", async () => {
     const h = await withLinks();
     h.clock.set(T0 + HOUR_MS);
@@ -478,6 +520,52 @@ describe("links, clicks and input validation", () => {
     expect((await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: future })).status).toBe(422);
     expect((await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: "yesterday" })).status).toBe(422);
     expect((await h.call("POST", "/signups", "not-an-object")).status).toBe(400);
+  });
+});
+
+describe("delayed reports", () => {
+  it("a first-open reported late keeps the window anchored at the real first open", async () => {
+    const h = setup();
+    await h.link("campaign", "cmp_123", "camp1");
+    h.clock.set(T0 + 8 * DAY_MS);
+    await h.firstOpen(INSTALL, iso(T0));
+    const click = await h.click("camp1");
+    await h.touch({ install_id: INSTALL, click_id: click });
+
+    const res = await h.signup({ user_id: "u1", install_id: INSTALL });
+
+    expect(res.json.window.first_opened_at).toBe(iso(T0));
+    expect(res.json.origin).toMatchObject({ kind: "organic", reason_code: "window_expired" });
+  });
+
+  it("a late signup report with the real signed_up_at does not credit a link opened after it", async () => {
+    const h = await withLinks();
+    h.clock.set(T0 + HOUR_MS);
+    const click = await h.click("camp1");
+    h.clock.set(T0 + 3 * HOUR_MS);
+    await h.touch({ install_id: INSTALL, click_id: click });
+
+    const res = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: iso(T0 + 2 * HOUR_MS) });
+
+    expect(res.json.origin).toMatchObject({ kind: "organic", reason_code: "no_eligible_touch" });
+    expect(res.json.touches[0].outcome).toBe("after_signup");
+  });
+
+  it("the same click reported twice keeps the earliest opened_at, whatever the arrival order", async () => {
+    const early = iso(T0 + HOUR_MS);
+    const late = iso(T0 + 3 * HOUR_MS);
+    for (const order of [[early, late], [late, early]]) {
+      const h = await withLinks();
+      h.clock.set(T0 + HOUR_MS);
+      const click = await h.click("camp1");
+      h.clock.set(T0 + 3 * HOUR_MS);
+      for (const openedAt of order) await h.touch({ install_id: INSTALL, click_id: click, opened_at: openedAt });
+
+      const res = await h.signup({ user_id: "u1", install_id: INSTALL, signed_up_at: iso(T0 + 2 * HOUR_MS) });
+
+      expect(res.json.origin).toMatchObject({ kind: "campaign", ref: "cmp_123" });
+      expect(res.json.touches.map((t: { opened_at: string }) => t.opened_at)).toEqual([early, early]);
+    }
   });
 });
 

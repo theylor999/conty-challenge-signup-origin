@@ -67,7 +67,7 @@ export interface TouchFact {
   /** Moment of the touch: server click time when known, else the app's opened_at. */
   at: number;
   atSource: "click" | "opened_at";
-  /** When the app says it opened the link. Never earlier than the click that produced it. */
+  /** When the app says it opened the link: the earliest report for this touch, never before the install's first open. */
   openedAt: number;
   /** Stable unique id per touch inside an install; last resort of the tie-break. */
   tieKey: string;

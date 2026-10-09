@@ -6,9 +6,8 @@ const INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\
 
 export type Body = Record<string, unknown>;
 
-export async function readBody(req: Request, allowEmpty = false): Promise<Body> {
+export async function readBody(req: Request): Promise<Body> {
   const text = await req.text();
-  if (allowEmpty && text.trim() === "") return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -45,18 +44,12 @@ export function ref(value: unknown): string {
 }
 
 /** ISO 8601 with an explicit offset; returns epoch milliseconds. */
-export function optionalInstant(value: unknown, field: string): number | undefined {
-  if (value === undefined || value === null) return undefined;
+export function requiredInstant(value: unknown, field: string): number {
+  if (value === undefined || value === null) throw new AppError(422, "invalid_field", `${field} é obrigatório.`);
   const ms = typeof value === "string" && isRealInstant(value) ? Date.parse(value) : NaN;
   if (Number.isNaN(ms)) {
     throw new AppError(422, "invalid_field", `${field} deve ser um instante ISO 8601 com fuso, ex.: 2026-03-10T12:00:00Z.`);
   }
-  return ms;
-}
-
-export function requiredInstant(value: unknown, field: string): number {
-  const ms = optionalInstant(value, field);
-  if (ms === undefined) throw new AppError(422, "invalid_field", `${field} é obrigatório.`);
   return ms;
 }
 

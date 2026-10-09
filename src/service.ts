@@ -26,7 +26,7 @@ export interface TouchInput {
 export interface SignupInput {
   userId: string;
   installId?: string;
-  signedUpAt?: number;
+  signedUpAt: number;
 }
 
 export class AttributionService {
@@ -88,21 +88,24 @@ export class AttributionService {
   }
 
   /** Idempotent: a second call returns the stored first_opened_at and never moves it. */
-  firstOpen(installId: string, openedAt?: number) {
-    const at = openedAt ?? this.clock.now();
-    this.rejectFuture(at, "opened_at");
-    const created = this.db.insertInstall({ install_id: installId, first_opened_at: at, recorded_at: this.clock.now() });
+  firstOpen(installId: string, openedAt: number) {
+    this.rejectFuture(openedAt, "opened_at");
+    const created = this.db.insertInstall({ install_id: installId, first_opened_at: openedAt, recorded_at: this.clock.now() });
     const install = this.db.getInstall(installId)!;
     return { created, install_id: installId, first_opened_at: iso(install.first_opened_at) };
   }
 
   recordTouch(input: TouchInput) {
-    if (!this.db.getInstall(input.installId)) {
+    const install = this.db.getInstall(input.installId);
+    if (!install) {
       throw new AppError(409, "first_open_required", "Registre a primeira abertura (POST /installs/:install_id/first-open) antes dos toques.");
     }
     const now = this.clock.now();
     const { openedAt } = input;
     this.rejectFuture(openedAt, "opened_at");
+    if (openedAt < install.first_opened_at) {
+      throw new AppError(422, "opened_before_first_open", "opened_at é anterior à primeira abertura do app deste install_id.");
+    }
 
     const resolved = resolveTouch(this.db, input, openedAt);
     const touchId = `tch_${sha256(`${input.installId}|${resolved.dedupKey}`).slice(0, 16)}`;
@@ -120,7 +123,7 @@ export class AttributionService {
         opened_at: openedAt,
         received_at: now,
       });
-      if (!inserted) this.db.countDuplicateReport(touchId);
+      if (!inserted) this.db.countDuplicateReport(touchId, openedAt);
       return !inserted;
     });
 
@@ -143,7 +146,7 @@ export class AttributionService {
       const existing = this.db.getSignup(input.userId);
       if (existing) {
         const sameInstall = input.installId === undefined || input.installId === existing.install_id;
-        const sameTime = input.signedUpAt === undefined || input.signedUpAt === existing.signed_up_at;
+        const sameTime = input.signedUpAt === existing.signed_up_at;
         if (!sameInstall || !sameTime) {
           throw new AppError(409, "signup_conflict", "Este user_id já tem cadastro com install_id ou signed_up_at diferente; a decisão congelada não muda.");
         }
@@ -151,7 +154,7 @@ export class AttributionService {
       }
 
       const now = this.clock.now();
-      const signedUpAt = input.signedUpAt ?? now;
+      const signedUpAt = input.signedUpAt;
       this.rejectFuture(signedUpAt, "signed_up_at");
 
       const install = input.installId ? this.db.getInstall(input.installId) : undefined;
